@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "stable-diffusion-api",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-05-01",
+  "ai": { "binding": "AI" },
+  "observability": { "enabled": true },
+  "vars": {
+    "DEFAULT_MODEL": "@cf/stabilityai/stable-diffusion-xl-base-1.0"
+  }
+}
