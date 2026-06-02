@@ -1,4 +1,4 @@
-# Stable Diffusion API on Cloudflare Workers
+# Text to Image API on Cloudflare Workers
 
 A serverless **text-to-image generation API** built on [Cloudflare Workers AI](https://developers.cloudflare.com/workers-ai/). Generate images from text prompts using Stable Diffusion XL, SDXL-Lightning, DreamShaper, and FLUX.1 [schnell] — all from a single Worker, with API-key auth and zero infrastructure to manage.
 
