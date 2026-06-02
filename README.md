@@ -2,8 +2,8 @@
 
 A serverless **text-to-image generation API** built on [Cloudflare Workers AI](https://developers.cloudflare.com/workers-ai/). Generate images from text prompts using Stable Diffusion XL, SDXL-Lightning, DreamShaper, and FLUX.1 [schnell] — all from a single Worker, with API-key auth and zero infrastructure to manage.
 
-<p align="center">
-  <img src="https://developers.cloudflare.com/_astro/workers-ai-logo.BMSEDtRz_2pUEni.svg" alt="Cloudflare Workers AI" width="420">
+<p  align="center"> 
+	<img  src="./assets/banner.png"  alt="Cloudflare Workers AI"  width="420"> 
 </p>
 
 <p align="center">
@@ -390,7 +390,3 @@ cloudflare-api/
 | CORS errors from a frontend                        | Already handled; ensure your fetch sends `content-type: application/json`         |
 
 ---
-
-## License
-
-MIT
