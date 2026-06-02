@@ -12,18 +12,25 @@ const CORS = {
 };
 
 const json = (data, status = 200) =>
-  new Response(JSON.stringify(data, null, 2), {
+  new Response(JSON.stringify(data), {
     status,
     headers: { "content-type": "application/json", ...CORS },
   });
 
 const bad = (msg, status = 400) => json({ error: msg }, status);
 
-function timingSafeEqual(a, b) {
-  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+async function timingSafeEqual(a, b) {
+  const enc = new TextEncoder();
+  const [ka, kb] = await Promise.all([
+    crypto.subtle.importKey("raw", enc.encode(a), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]),
+    crypto.subtle.importKey("raw", enc.encode(b), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]),
+  ]);
+  const msg = enc.encode("verify");
+  const [sa, sb] = await Promise.all([
+    crypto.subtle.sign("HMAC", ka, msg),
+    crypto.subtle.sign("HMAC", kb, msg),
+  ]);
+  return crypto.subtle.timingSafeEqual(sa, sb);
 }
 
 function extractKey(request) {
@@ -37,7 +44,7 @@ function extractKey(request) {
   return new URL(request.url).searchParams.get("api_key");
 }
 
-function authorize(request, env) {
+async function authorize(request, env) {
   if (!env.API_KEY) {
     return bad("Server misconfigured: API_KEY secret not set", 500);
   }
@@ -55,7 +62,7 @@ function authorize(request, env) {
       },
     );
   }
-  if (!timingSafeEqual(provided, env.API_KEY)) {
+  if (!await timingSafeEqual(provided, env.API_KEY)) {
     return json({ error: "Invalid API key" }, 403);
   }
   return null;
@@ -68,7 +75,7 @@ function resolveModel(name, fallback) {
   return null;
 }
 
-function buildInputs(params, model) {
+function buildInputs(params, env) {
   const {
     prompt,
     negative_prompt,
@@ -80,17 +87,26 @@ function buildInputs(params, model) {
     strength,
   } = params;
 
+  // Per-request params take priority; env vars are fallback defaults.
+  const resolvedWidth    = width    != null ? Number(width)    : (env.DEFAULT_WIDTH    ? Number(env.DEFAULT_WIDTH)    : undefined);
+  const resolvedHeight   = height   != null ? Number(height)   : (env.DEFAULT_HEIGHT   ? Number(env.DEFAULT_HEIGHT)   : undefined);
+  const resolvedSteps    = num_steps != null ? Number(num_steps) : (env.DEFAULT_STEPS   ? Number(env.DEFAULT_STEPS)    : undefined);
+  const resolvedGuidance = guidance != null ? Number(guidance) : (env.DEFAULT_GUIDANCE ? Number(env.DEFAULT_GUIDANCE) : undefined);
+  const resolvedSeed     = seed     != null ? Number(seed)     : (env.DEFAULT_SEED     ? Number(env.DEFAULT_SEED)     : undefined);
+
+  const model = resolveModel(params.model, env.DEFAULT_MODEL);
+
   const inputs = { prompt };
-  if (negative_prompt) inputs.negative_prompt = negative_prompt;
-  if (num_steps != null) inputs.num_steps = Number(num_steps);
-  if (width != null) inputs.width = Number(width);
-  if (height != null) inputs.height = Number(height);
-  if (guidance != null) inputs.guidance = Number(guidance);
-  if (seed != null) inputs.seed = Number(seed);
-  if (strength != null) inputs.strength = Number(strength);
+  if (negative_prompt)         inputs.negative_prompt = negative_prompt;
+  if (resolvedWidth != null)   inputs.width    = resolvedWidth;
+  if (resolvedHeight != null)  inputs.height   = resolvedHeight;
+  if (resolvedSteps != null)   inputs.num_steps = resolvedSteps;
+  if (resolvedGuidance != null) inputs.guidance = resolvedGuidance;
+  if (resolvedSeed != null)    inputs.seed     = resolvedSeed;
+  if (strength != null)        inputs.strength = Number(strength);
 
   // flux-1-schnell uses `steps` (max 8) and returns base64 JSON, not a stream.
-  if (model.includes("flux-1-schnell")) {
+  if (model && model.includes("flux-1-schnell")) {
     if (inputs.num_steps != null) {
       inputs.steps = Math.min(inputs.num_steps, 8);
       delete inputs.num_steps;
@@ -137,6 +153,52 @@ async function streamToBytes(stream) {
   return out;
 }
 
+async function handleRoot(request, env) {
+  if (request.method !== "POST") {
+    return bad("Method not allowed. Use POST.", 405);
+  }
+  const ct = request.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) {
+    return bad("Content-Type must be application/json");
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return bad("Invalid JSON body");
+  }
+
+  // `topic` is the user-facing field name for this endpoint
+  const prompt = body.topic;
+  if (!prompt || typeof prompt !== "string") {
+    return bad("`topic` is required");
+  }
+  if (prompt.length > 2048) {
+    return bad("`topic` too long (max 2048 chars)");
+  }
+
+  const model = resolveModel(body.model, env.DEFAULT_MODEL);
+  if (!model) return bad(`Unknown model. Available: ${Object.keys(MODELS).join(", ")}`);
+
+  // Merge root-level width/height into params, env fills the rest
+  const params = { prompt, ...body };
+  const inputs = buildInputs(params, env);
+
+  try {
+    const { body: imgBody, contentType } = await runModel(env, model, inputs);
+    return new Response(imgBody, {
+      headers: {
+        "content-type": contentType,
+        "cache-control": "public, max-age=3600",
+        ...CORS,
+      },
+    });
+  } catch (err) {
+    return bad(`Inference failed: ${err.message || String(err)}`, 500);
+  }
+}
+
 async function handleGenerate(request, env) {
   let params;
   if (request.method === "POST") {
@@ -164,7 +226,7 @@ async function handleGenerate(request, env) {
   const model = resolveModel(params.model, env.DEFAULT_MODEL);
   if (!model) return bad(`Unknown model. Available: ${Object.keys(MODELS).join(", ")}`);
 
-  const inputs = buildInputs(params, model);
+  const inputs = buildInputs(params, env);
   const format = (params.format || "image").toLowerCase();
 
   try {
@@ -261,21 +323,34 @@ export default {
       return new Response(null, { headers: CORS });
     }
 
-    if (url.pathname === "/" || url.pathname === "/playground") {
+    if (url.pathname === "/playground") {
       return new Response(PLAYGROUND_HTML, {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
+    }
+
+    if (url.pathname === "/") {
+      const denied = await authorize(request, env);
+      if (denied) return denied;
+      return handleRoot(request, env);
     }
 
     if (url.pathname === "/v1/models") {
       return json({
         default: env.DEFAULT_MODEL,
         aliases: MODELS,
+        defaults: {
+          width:    env.DEFAULT_WIDTH    ? Number(env.DEFAULT_WIDTH)    : undefined,
+          height:   env.DEFAULT_HEIGHT   ? Number(env.DEFAULT_HEIGHT)   : undefined,
+          steps:    env.DEFAULT_STEPS    ? Number(env.DEFAULT_STEPS)    : undefined,
+          guidance: env.DEFAULT_GUIDANCE ? Number(env.DEFAULT_GUIDANCE) : undefined,
+          seed:     env.DEFAULT_SEED     ? Number(env.DEFAULT_SEED)     : undefined,
+        },
       });
     }
 
     if (url.pathname === "/v1/generate") {
-      const denied = authorize(request, env);
+      const denied = await authorize(request, env);
       if (denied) return denied;
       return handleGenerate(request, env);
     }
