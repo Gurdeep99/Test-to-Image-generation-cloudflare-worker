@@ -131,7 +131,7 @@ The simple endpoint. Send a `topic` and get a JPEG back.
 **Response**: raw `image/jpeg`.
 
 ```bash
-curl --location 'https://ai-image.gurdeep.net' \
+curl --location 'https://yourdomain.com' \
   --header 'Content-Type: application/json' \
   --header 'Authorization: Bearer <your-api-key>' \
   --data '{
